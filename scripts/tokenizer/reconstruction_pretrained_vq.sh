@@ -1,0 +1,1 @@
+torchrun --nnodes=1 --nproc_per_node=4 --node_rank=0 tokenizer/tokenizer_image/reconstruction_vq_ddp.py --data-path /disk2/xrh/datasets/imagenet1k/val --vq-ckpt outputs/vq_ds16_c2i.pt

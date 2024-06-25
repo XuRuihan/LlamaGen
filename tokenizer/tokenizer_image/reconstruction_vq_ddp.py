@@ -16,6 +16,8 @@ import itertools
 from skimage.metrics import peak_signal_noise_ratio as psnr_loss
 from skimage.metrics import structural_similarity as ssim_loss
 
+import sys
+sys.path.append(os.getcwd())
 from dataset.augmentation import center_crop_arr
 from dataset.build import build_dataset
 from tokenizer.tokenizer_image.vq_model import VQ_models
@@ -136,10 +138,13 @@ def main(args):
                 samples = F.interpolate(samples, size=(args.image_size_eval, args.image_size_eval), mode='bicubic')
         samples = torch.clamp(127.5 * samples + 128.0, 0, 255).permute(0, 2, 3, 1).to("cpu", dtype=torch.uint8).numpy()
 
+        indices = indices.detach().cpu().reshape(latent.shape[0], latent.shape[2], latent.shape[3])
         # Save samples to disk as individual .png files
         for i, (sample, rgb_gt) in enumerate(zip(samples, rgb_gts)):
             index = i * dist.get_world_size() + rank + total
             Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
+            Image.fromarray((rgb_gt * 255).astype(np.uint8)).save(f"{sample_folder_dir}/{index:06d}_gt.png")
+            torch.save(indices[i], f"{sample_folder_dir}/{index:06d}_idx.pt")
             # metric
             rgb_restored = sample.astype(np.float32) / 255. # rgb_restored value is between [0, 1]
             psnr = psnr_loss(rgb_restored, rgb_gt)

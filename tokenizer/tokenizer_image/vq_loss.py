@@ -4,6 +4,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 from tokenizer.tokenizer_image.lpips import LPIPS
 from tokenizer.tokenizer_image.discriminator_patchgan import NLayerDiscriminator as PatchGANDiscriminator
@@ -44,6 +45,60 @@ def adopt_weight(weight, global_step, threshold=0, value=0.):
     if global_step < threshold:
         weight = value
     return weight
+
+
+class DCTLoss(nn.Module):
+    def __init__(
+        self,
+        patch_size: int = 16,
+        loss_type: str = "l1",
+        reduction: str = "mean",
+    ):
+        super().__init__()
+        assert loss_type != "l2", "l2 loss is equal to mse on spatial domain!"
+        self.ps = patch_size
+        self.loss_type = loss_type
+        self.reduction = reduction
+        self.register_buffer("harmonics", DCTLoss._harmonics(patch_size))
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        input = input.unfold(2, self.ps, self.ps).unfold(3, self.ps, self.ps)
+        target = target.unfold(2, self.ps, self.ps).unfold(3, self.ps, self.ps)
+
+        diff = (self.dct(input, self.harmonics) - self.dct(target, self.harmonics))
+        if self.loss_type == "l1":
+            loss = diff.abs()
+        elif self.loss_type == "l2":
+            loss = diff ** 2
+
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
+
+    @staticmethod
+    def _harmonics(N: int) -> torch.Tensor:
+        r"""
+        Computes the cosine harmonics for the DCT transform
+        """
+        spectral = torch.arange(N, dtype=torch.float32).reshape((N, 1))
+        spatial = spectral.clone().t()
+
+        spectral = (spectral * math.pi) / (2 * N)
+        spatial = 2 * spatial + 1
+        harmonics = torch.cos(spectral @ spatial)
+
+        norm = torch.full([N, 1], (2 / N) ** 0.5)
+        norm[0, 0] /= 2**0.5
+        return harmonics * norm
+
+    def dct(self, image: torch.Tensor, harmonics) -> torch.Tensor:
+        coeff = harmonics @ image @ harmonics.t()
+        return coeff
+
+    def idct(self, coeff: torch.Tensor, harmonics) -> torch.Tensor:
+        image = harmonics.t() @ coeff @ harmonics
+        return image
 
 
 class VQLoss(nn.Module):
@@ -102,6 +157,7 @@ class VQLoss(nn.Module):
         else:
             raise ValueError(f"Unknown rec loss '{reconstruction_loss}'.")
         self.rec_weight = reconstruction_weight
+        self.dct_loss = DCTLoss()
 
         # codebook loss
         self.codebook_weight = codebook_weight
@@ -118,34 +174,35 @@ class VQLoss(nn.Module):
                 logger=None, log_every=100):
         # generator update
         if optimizer_idx == 0:
+            inputs = inputs.contiguous()
+            reconstructions = reconstructions.contiguous()
+
             # reconstruction loss
-            rec_loss = self.rec_loss(inputs.contiguous(), reconstructions.contiguous())
+            rec_loss = 0.8 * self.rec_weight * self.rec_loss(inputs, reconstructions)
+            dct_loss = 0.2 * self.rec_weight * self.dct_loss(inputs, reconstructions)
 
             # perceptual loss
-            p_loss = self.perceptual_loss(inputs.contiguous(), reconstructions.contiguous())
-            p_loss = torch.mean(p_loss)
+            p_loss = self.perceptual_loss(inputs, reconstructions)
+            p_loss = self.perceptual_weight * torch.mean(p_loss)
 
             # discriminator loss
-            logits_fake = self.discriminator(reconstructions.contiguous())
+            logits_fake = self.discriminator(reconstructions)
             generator_adv_loss = self.gen_adv_loss(logits_fake)
             
             if self.disc_adaptive_weight:
-                null_loss = self.rec_weight * rec_loss + self.perceptual_weight * p_loss
+                null_loss = rec_loss + dct_loss + p_loss
                 disc_adaptive_weight = self.calculate_adaptive_weight(null_loss, generator_adv_loss, last_layer=last_layer)
             else:
                 disc_adaptive_weight = 1
             disc_weight = adopt_weight(self.disc_weight, global_step, threshold=self.discriminator_iter_start)
             
-            loss = self.rec_weight * rec_loss + \
-                self.perceptual_weight * p_loss + \
+            loss = rec_loss + dct_loss + p_loss + \
                 disc_adaptive_weight * disc_weight * generator_adv_loss + \
                 codebook_loss[0] + codebook_loss[1] + codebook_loss[2]
             
             if global_step % log_every == 0:
-                rec_loss = self.rec_weight * rec_loss
-                p_loss = self.perceptual_weight * p_loss
                 generator_adv_loss = disc_adaptive_weight * disc_weight * generator_adv_loss
-                logger.info(f"(Generator) rec_loss: {rec_loss:.4f}, perceptual_loss: {p_loss:.4f}, "
+                logger.info(f"(Generator) rec_loss: {rec_loss:.4f}, dct_loss: {dct_loss:.4f} perceptual_loss: {p_loss:.4f}, "
                             f"vq_loss: {codebook_loss[0]:.4f}, commit_loss: {codebook_loss[1]:.4f}, entropy_loss: {codebook_loss[2]:.4f}, "
                             f"codebook_usage: {codebook_loss[3]:.4f}, generator_adv_loss: {generator_adv_loss:.4f}, "
                             f"disc_adaptive_weight: {disc_adaptive_weight:.4f}, disc_weight: {disc_weight:.4f}")
