@@ -65,7 +65,7 @@ class DCTLoss(nn.Module):
         input = input.unfold(2, self.ps, self.ps).unfold(3, self.ps, self.ps)
         target = target.unfold(2, self.ps, self.ps).unfold(3, self.ps, self.ps)
 
-        diff = (self.dct(input, self.harmonics) - self.dct(target, self.harmonics))
+        diff = self.dct(input - target, self.harmonics)
         if self.loss_type == "l1":
             loss = diff.abs()
         elif self.loss_type == "l2":
@@ -178,8 +178,8 @@ class VQLoss(nn.Module):
             reconstructions = reconstructions.contiguous()
 
             # reconstruction loss
-            rec_loss = 0.8 * self.rec_weight * self.rec_loss(inputs, reconstructions)
-            dct_loss = 0.2 * self.rec_weight * self.dct_loss(inputs, reconstructions)
+            rec_loss = 1.0 * self.rec_weight * self.rec_loss(inputs, reconstructions)
+            dct_loss = 0.0  # 0.2 * self.rec_weight * self.dct_loss(inputs, reconstructions)
 
             # perceptual loss
             p_loss = self.perceptual_loss(inputs, reconstructions)
@@ -195,14 +195,13 @@ class VQLoss(nn.Module):
             else:
                 disc_adaptive_weight = 1
             disc_weight = adopt_weight(self.disc_weight, global_step, threshold=self.discriminator_iter_start)
-            
-            loss = rec_loss + dct_loss + p_loss + \
-                disc_adaptive_weight * disc_weight * generator_adv_loss + \
-                codebook_loss[0] + codebook_loss[1] + codebook_loss[2]
-            
+            generator_adv_loss = disc_adaptive_weight * disc_weight * generator_adv_loss
+
+            loss = (codebook_loss[0] + codebook_loss[1] + codebook_loss[2]) + \
+                rec_loss + dct_loss + p_loss + generator_adv_loss
+
             if global_step % log_every == 0:
-                generator_adv_loss = disc_adaptive_weight * disc_weight * generator_adv_loss
-                logger.info(f"(Generator) rec_loss: {rec_loss:.4f}, dct_loss: {dct_loss:.4f} perceptual_loss: {p_loss:.4f}, "
+                logger.info(f"(Generator) rec_loss: {rec_loss:.4f}, dct_loss: {dct_loss:.4f}, perceptual_loss: {p_loss:.4f}, "
                             f"vq_loss: {codebook_loss[0]:.4f}, commit_loss: {codebook_loss[1]:.4f}, entropy_loss: {codebook_loss[2]:.4f}, "
                             f"codebook_usage: {codebook_loss[3]:.4f}, generator_adv_loss: {generator_adv_loss:.4f}, "
                             f"disc_adaptive_weight: {disc_adaptive_weight:.4f}, disc_weight: {disc_weight:.4f}")
