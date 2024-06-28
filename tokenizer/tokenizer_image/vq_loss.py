@@ -212,13 +212,12 @@ class VQLoss(nn.Module):
             logits_real = self.discriminator(inputs.contiguous().detach())
             logits_fake = self.discriminator(reconstructions.contiguous().detach())
 
-            disc_weight = adopt_weight(self.disc_weight, global_step, threshold=self.discriminator_iter_start)
-            d_adversarial_loss = disc_weight * self.disc_loss(logits_real, logits_fake)
-            
+            d_adversarial_loss = self.disc_weight * self.disc_loss(logits_real, logits_fake)
+
             if global_step % log_every == 0:
                 logits_real = logits_real.detach().mean()
                 logits_fake = logits_fake.detach().mean()
                 logger.info(f"(Discriminator) " 
-                            f"discriminator_adv_loss: {d_adversarial_loss:.4f}, disc_weight: {disc_weight:.4f}, "
+                            f"discriminator_adv_loss: {d_adversarial_loss:.4f}, disc_weight: {self.disc_weight:.4f}, "
                             f"logits_real: {logits_real:.4f}, logits_fake: {logits_fake:.4f}")
             return d_adversarial_loss

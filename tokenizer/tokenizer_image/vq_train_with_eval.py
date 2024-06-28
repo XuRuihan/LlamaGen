@@ -473,7 +473,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-workers", type=int, default=16)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--ckpt-every", type=int, default=5000)
-    # It is wierd to use gradient accumulation with GAN trainig. Odd gradient coupling.
+    # It is weird to use gradient accumulation with GAN training. Odd gradient coupling.
     # parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--mixed-precision", type=str, default='bf16', choices=["none", "fp16", "bf16"]) 
     parser.add_argument("--sample-dir", type=str, default="reconstructions")
