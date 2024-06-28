@@ -205,6 +205,8 @@ class Decoder(nn.Module):
 class VectorQuantizer(nn.Module):
     def __init__(self, n_e, e_dim, beta, entropy_loss_ratio, l2_norm, show_usage, heads):
         super().__init__()
+        self.enable = True
+
         self.n_e = n_e
         self.e_dim = e_dim
         self.beta = beta
@@ -258,6 +260,13 @@ class VectorQuantizer(nn.Module):
             vq_loss = torch.mean((z_q - z.detach()) ** 2) 
             commit_loss = self.beta * torch.mean((z_q.detach() - z) ** 2) 
             entropy_loss = self.entropy_loss_ratio * compute_entropy_loss(-d)
+
+            if not self.enable:
+                vq_loss = 0 * vq_loss
+                commit_loss = 0 * commit_loss
+                entropy_loss = 0 * entropy_loss
+                z = rearrange(z, 'd b h w e -> b (d e) h w')
+                return z, (vq_loss, commit_loss, entropy_loss, codebook_usage), (perplexity, min_encodings, min_encoding_indices)
 
         # preserve gradients
         z_q = z + (z_q - z).detach()

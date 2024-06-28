@@ -23,6 +23,7 @@ import numpy as np
 from skimage.metrics import peak_signal_noise_ratio as psnr_loss
 from skimage.metrics import structural_similarity as ssim_loss
 import itertools
+from cleanfid import fid
 
 import sys
 sys.path.append(os.getcwd())
@@ -115,10 +116,10 @@ def validation(logger, vq_model, sample_folder_dir, num_fid_samples, device, ran
     vq_model.eval()
     model = vq_model.module if isinstance(vq_model, DDP) else vq_model
 
-    # if rank == 0:
-    #     os.makedirs(sample_folder_dir, exist_ok=True)
-    #     print(f"Saving .png samples at {sample_folder_dir}")
-    # dist.barrier()
+    if rank == 0:
+        os.makedirs(sample_folder_dir, exist_ok=True)
+        print(f"Saving .png samples at {sample_folder_dir}")
+    dist.barrier()
 
     valid_loader, _ = build_valid_dataloader(args, rank)
 
@@ -141,8 +142,8 @@ def validation(logger, vq_model, sample_folder_dir, num_fid_samples, device, ran
 
         # Save samples to disk as individual .png files
         for i, (sample, rgb_gt) in enumerate(zip(samples, rgb_gts)):
-            # index = i * dist.get_world_size() + rank + total
-            # Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
+            index = i * dist.get_world_size() + rank + total
+            Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
             # metric
             rgb_restored = sample.astype(np.float32) / 255. # rgb_restored value is between [0, 1]
             psnr = psnr_loss(rgb_restored, rgb_gt)
@@ -168,7 +169,8 @@ def validation(logger, vq_model, sample_folder_dir, num_fid_samples, device, ran
         gather_ssim_val = list(itertools.chain(*gather_ssim_val))        
         psnr_val_rgb = sum(gather_psnr_val) / len(gather_psnr_val)
         ssim_val_rgb = sum(gather_ssim_val) / len(gather_ssim_val)
-        logger.info("PSNR: %f, SSIM: %f " % (psnr_val_rgb, ssim_val_rgb))
+        fid_val = fid.compute_fid(sample_folder_dir, dataset_name=args.dataset, mode="clean", dataset_split="custom")
+        logger.info("rFID: %f, PSNR: %f, SSIM: %f" % (fid_val, psnr_val_rgb, ssim_val_rgb))
 
         # result_file = f"{sample_folder_dir}_results.txt"
         # logger.info("writing results to {}".format(result_file))
@@ -177,7 +179,7 @@ def validation(logger, vq_model, sample_folder_dir, num_fid_samples, device, ran
 
         # create_npz_from_sample_folder(sample_folder_dir, num_fid_samples)
         # print("Done.")
-    
+
     dist.barrier()
 
 
@@ -317,12 +319,16 @@ def main(args):
     running_loss = 0
     start_time = time.time()
 
+    # vq_model.module.quantize.enable = False
+
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(start_epoch, args.epochs):
         vq_model.train()
         train_sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
         for x, y in train_loader:
+            # if train_steps + 1 == args.disc_start:
+            #     vq_model.module.quantize.enable = True
             imgs = x.to(device, non_blocking=True)
 
             # generator training
@@ -401,7 +407,7 @@ def main(args):
                 dist.barrier()
 
         folder_name = (f"{args.vq_model}-{args.dataset}-size-{args.image_size}-size-{args.image_size_eval}"
-                    f"-codebook-size-{args.codebook_size}-dim-{args.codebook_embed_dim}-seed-{args.global_seed}-epoch-{epoch}")
+                    f"-codebook-size-{args.codebook_size}-dim-{args.codebook_embed_dim}-seed-{args.global_seed}")
         sample_folder_dir = f"{args.sample_dir}/{folder_name}"
         validation(logger, vq_model, sample_folder_dir, num_fid_samples, device, rank, args)
 
