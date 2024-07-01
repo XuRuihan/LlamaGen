@@ -258,7 +258,7 @@ class VectorQuantizer(nn.Module):
         if self.training:
             vq_loss = torch.mean((z_q - z.detach()) ** 2) 
             commit_loss = self.beta * torch.mean((z_q.detach() - z) ** 2) 
-            entropy_loss = self.entropy_loss_ratio * compute_entropy_loss(-d)
+            entropy_loss = self.entropy_loss_ratio * self.compute_entropy_loss(-d)
 
         # preserve gradients
         z_q = z + (z_q - z).detach()
@@ -285,6 +285,22 @@ class VectorQuantizer(nn.Module):
             z_q = rearrange(z_q, 'd (b h w) e -> b h w (d e)', b=B, h=H, w=W)
 
         return z_q
+
+    @staticmethod
+    def compute_entropy_loss(affinity, loss_type="softmax", temperature=0.01):
+        flat_affinity = affinity.reshape(-1, affinity.shape[-1])
+        flat_affinity /= temperature
+        probs = F.softmax(flat_affinity, dim=-1)
+        log_probs = F.log_softmax(flat_affinity + 1e-5, dim=-1)
+        if loss_type == "softmax":
+            target_probs = probs
+        else:
+            raise ValueError("Entropy loss {} not supported".format(loss_type))
+        avg_probs = torch.mean(target_probs, dim=0)
+        avg_entropy = - torch.sum(avg_probs * torch.log(avg_probs + 1e-5))
+        sample_entropy = - torch.mean(torch.sum(target_probs * log_probs, dim=-1))
+        loss = sample_entropy - avg_entropy
+        return loss
 
 
 class ConvNeXtBlock(nn.Module):
@@ -428,22 +444,6 @@ class Downsample(nn.Module):
         else:
             x = F.avg_pool2d(x, kernel_size=2, stride=2)
         return x
-
-
-def compute_entropy_loss(affinity, loss_type="softmax", temperature=0.01):
-    flat_affinity = affinity.reshape(-1, affinity.shape[-1])
-    flat_affinity /= temperature
-    probs = F.softmax(flat_affinity, dim=-1)
-    log_probs = F.log_softmax(flat_affinity + 1e-5, dim=-1)
-    if loss_type == "softmax":
-        target_probs = probs
-    else:
-        raise ValueError("Entropy loss {} not supported".format(loss_type))
-    avg_probs = torch.mean(target_probs, dim=0)
-    avg_entropy = - torch.sum(avg_probs * torch.log(avg_probs + 1e-5))
-    sample_entropy = - torch.mean(torch.sum(target_probs * log_probs, dim=-1))
-    loss = sample_entropy - avg_entropy
-    return loss
 
 
 #################################################################################
