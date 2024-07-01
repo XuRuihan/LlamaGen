@@ -151,7 +151,7 @@ def main(args):
             ssim = ssim_loss(rgb_restored, rgb_gt, multichannel=True, data_range=2.0, channel_axis=-1)
             psnr_val_rgb.append(psnr)
             ssim_val_rgb.append(ssim)
-            
+
         total += global_batch_size
 
     # ------------------------------------

@@ -2,10 +2,10 @@
 #   fast-DiT: https://github.com/chuanyangjin/fast-DiT/blob/main/train.py
 #   nanoGPT: https://github.com/karpathy/nanoGPT/blob/master/model.py
 import torch
-import torch.nn.functional as F
 # the first flag below was False when we tested this script but True makes A100 training a lot faster:
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+import torch.nn.functional as F
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader
@@ -144,6 +144,8 @@ def validation(logger, vq_model, sample_folder_dir, num_fid_samples, device, ran
         for i, (sample, rgb_gt) in enumerate(zip(samples, rgb_gts)):
             index = i * dist.get_world_size() + rank + total
             Image.fromarray(sample).save(f"{sample_folder_dir}/{index:06d}.png")
+            Image.fromarray((rgb_gt * 255).astype(np.uint8)).save(f"{sample_folder_dir}/{index:06d}_gt.png")
+            torch.save(indices[i], f"{sample_folder_dir}/{index:06d}_idx.pt")
             # metric
             rgb_restored = sample.astype(np.float32) / 255. # rgb_restored value is between [0, 1]
             psnr = psnr_loss(rgb_restored, rgb_gt)
@@ -319,16 +321,12 @@ def main(args):
     running_loss = 0
     start_time = time.time()
 
-    # vq_model.module.quantize.enable = False
-
     logger.info(f"Training for {args.epochs} epochs...")
     for epoch in range(start_epoch, args.epochs):
         vq_model.train()
         train_sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
         for x, y in train_loader:
-            # if train_steps + 1 == args.disc_start:
-            #     vq_model.module.quantize.enable = True
             imgs = x.to(device, non_blocking=True)
 
             # generator training

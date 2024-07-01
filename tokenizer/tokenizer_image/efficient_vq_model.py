@@ -205,7 +205,6 @@ class Decoder(nn.Module):
 class VectorQuantizer(nn.Module):
     def __init__(self, n_e, e_dim, beta, entropy_loss_ratio, l2_norm, show_usage, heads):
         super().__init__()
-        self.enable = True
 
         self.n_e = n_e
         self.e_dim = e_dim
@@ -222,10 +221,10 @@ class VectorQuantizer(nn.Module):
         if self.show_usage:
             self.register_buffer("codebook_used", nn.Parameter(torch.zeros(65536)))
 
-    def forward(self, z):
+    def forward(self, z: torch.Tensor):
         # reshape z -> (batch, height, width, channel) and flatten
         z = rearrange(z, "b (d e) h w -> d b h w e", d=self.heads).contiguous()
-        z_flattened = z.view(self.heads, -1, self.e_dim // self.heads)
+        z_flattened = z.detach().view(self.heads, -1, self.e_dim // self.heads)
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
 
         if self.l2_norm:
@@ -237,7 +236,7 @@ class VectorQuantizer(nn.Module):
 
         d = torch.sum(z_flattened ** 2, dim=-1).unsqueeze(-1) + \
             torch.sum(embedding ** 2, dim=-1).unsqueeze(-2) - 2 * \
-            z_flattened @ embedding.transpose(-2, -1)
+            z_flattened @ embedding.mT
 
         min_encoding_indices = torch.argmin(d, dim=-1)
         z_q = embedding[torch.arange(self.heads, device=z.device).unsqueeze(-1), min_encoding_indices]
@@ -261,18 +260,12 @@ class VectorQuantizer(nn.Module):
             commit_loss = self.beta * torch.mean((z_q.detach() - z) ** 2) 
             entropy_loss = self.entropy_loss_ratio * compute_entropy_loss(-d)
 
-            if not self.enable:
-                vq_loss = 0 * vq_loss
-                commit_loss = 0 * commit_loss
-                entropy_loss = 0 * entropy_loss
-                z = rearrange(z, 'd b h w e -> b (d e) h w')
-                return z, (vq_loss, commit_loss, entropy_loss, codebook_usage), (perplexity, min_encodings, min_encoding_indices)
-
         # preserve gradients
         z_q = z + (z_q - z).detach()
 
         # reshape back to match original input shape
         z_q = rearrange(z_q, 'd b h w e -> b (d e) h w')
+        min_encoding_indices = rearrange(min_encoding_indices, 'd (b h w) -> b d h w', b=z_q.shape[0], h=z_q.shape[2], w=z_q.shape[3])
 
         return z_q, (vq_loss, commit_loss, entropy_loss, codebook_usage), (perplexity, min_encodings, min_encoding_indices)
 
@@ -283,16 +276,14 @@ class VectorQuantizer(nn.Module):
         else:
             embedding = self.embedding
 
+        B, D, H, W = indices.shape
+        indices = rearrange(indices, 'b d h w -> d (b h w)')
         z_q = embedding[torch.arange(self.heads, device=embedding.device).unsqueeze(-1), indices]
-        z_q = rearrange(z_q, 'd n e -> n (d e)')
+        if channel_first:
+            z_q = rearrange(z_q, 'd (b h w) e -> b (d e) h w', b=B, h=H, w=W)
+        else:
+            z_q = rearrange(z_q, 'd (b h w) e -> b h w (d e)', b=B, h=H, w=W)
 
-        if shape is not None:
-            if channel_first:
-                z_q = z_q.reshape(shape[0], shape[2], shape[3], shape[1])
-                # reshape back to match original input shape
-                z_q = z_q.permute(0, 3, 1, 2).contiguous()
-            else:
-                z_q = z_q.view(shape)
         return z_q
 
 
